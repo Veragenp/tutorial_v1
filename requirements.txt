@@ -1,0 +1,287 @@
+requests==2.31.0
+gspread==5.12.0
+google-auth==2.38.0  # Заменяем oauth2client
+pybit==5.5.0
+
+
+import logging
+import time
+import os
+from datetime import datetime
+from google_sheets import GoogleSheetsClient
+from fetch_prices import PriceFetcher
+import threading
+
+# Настройка логирования
+log_dir = "logs"
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+# Генерируем уникальное имя файла с временной меткой
+current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+log_file = os.path.join(log_dir, f"price_monitor_{current_time}.log")
+
+logging.basicConfig(
+    filename=log_file,
+    filemode='w',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    encoding='utf-8',
+    force=True
+)
+
+class PriceMonitor:
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("Инициализация PriceMonitor")
+        print("Инициализация PriceMonitor...")
+
+        # Получаем монеты и уровни из Google Sheets
+        self.google_sheets = GoogleSheetsClient()
+        self.trading_coins = self.google_sheets.get_trading_coins()
+        self.levels = {coin["coin"]: {"long_level": coin["long_level"], "short_level": coin["short_level"]} for coin in self.trading_coins}
+
+        # Логируем список монет и их уровни
+        self.logger.info(f"Получено {len(self.trading_coins)} монет для мониторинга: {[coin['coin'] for coin in self.trading_coins]}")
+        for coin in self.trading_coins:
+            self.logger.info(f"Монета: {coin['coin']}, long_level: {coin['long_level']}, short_level: {coin['short_level']}")
+        print(f"Получено {len(self.trading_coins)} монет для мониторинга: {[coin['coin'] for coin in self.trading_coins]}")
+
+        # Инициализация PriceFetcher
+        self.price_fetcher = PriceFetcher()
+        self.running = True
+        self.alerts_history = []
+        self.prev_prices = {coin["coin"]: None for coin in self.trading_coins}  # Храним предыдущие цены
+        self.alerted = {coin["coin"]: {"long": False, "short": False} for coin in self.trading_coins}  # Флаги оповещений
+
+    def check_levels(self, symbol, current_price):
+        """Проверяет пересечение уровней LONG/SHORT и генерирует оповещения."""
+        levels = self.levels.get(symbol, {})
+        long_level = levels.get("long_level")
+        short_level = levels.get("short_level")
+
+        # Логируем для отладки
+        self.logger.debug(f"Проверка уровней для {symbol}: current_price {current_price}, long_level: {long_level}, short_level: {short_level}")
+        print(f"Проверка уровней для {symbol}: current_price {current_price}, long_level: {long_level}, short_level: {short_level}")
+
+        # Если предыдущей цены нет (первый тик), просто сохраняем и выходим
+        if self.prev_prices[symbol] is None:
+            self.prev_prices[symbol] = current_price
+            return
+
+        # Проверяем пересечение
+        if long_level is not None and not self.alerted[symbol]["long"]:
+            if self.prev_prices[symbol] > long_level and current_price <= long_level:
+                alert_msg = f"Пересечение уровня LONG для {symbol}: цена {current_price} <= {long_level}"
+                self.logger.info(alert_msg)
+                print(alert_msg)
+                self.alerts_history.append({
+                    "symbol": symbol,
+                    "type": "LONG",
+                    "price": current_price,
+                    "level": long_level,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
+                self.alerted[symbol]["long"] = True
+
+        if short_level is not None and not self.alerted[symbol]["short"]:
+            if self.prev_prices[symbol] < short_level and current_price >= short_level:
+                alert_msg = f"Пересечение уровня SHORT для {symbol}: цена {current_price} >= {short_level}"
+                self.logger.info(alert_msg)
+                print(alert_msg)
+                self.alerts_history.append({
+                    "symbol": symbol,
+                    "type": "SHORT",
+                    "price": current_price,
+                    "level": short_level,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
+                self.alerted[symbol]["short"] = True
+
+        # Обновляем предыдущую цену
+        self.prev_prices[symbol] = current_price
+
+    def run(self):
+        """Запуск мониторинга цен."""
+        self.logger.info("Запуск мониторинга цен...")
+        print("Запуск мониторинга цен...")
+
+        # Запускаем PriceFetcher в отдельном потоке
+        fetcher_thread = threading.Thread(target=self.price_fetcher.run)
+        fetcher_thread.daemon = True
+        fetcher_thread.start()
+
+        try:
+            while self.running:
+                # Получаем текущие цены из PriceFetcher
+                current_prices = self.price_fetcher.get_current_prices()
+
+                # Проверяем уровни для каждой монеты
+                for symbol, price in current_prices.items():
+                    if price > 0:  # Проверяем, что цена обновилась
+                        self.check_levels(symbol, price)
+
+                # Логируем историю оповещений
+                if self.alerts_history:
+                    self.logger.info(f"История оповещений: {self.alerts_history[-5:]}")
+                    print(f"История оповещений: {self.alerts_history[-5:]}")
+
+                time.sleep(10)  # Проверяем каждые 10 секунд
+        except KeyboardInterrupt:
+            self.logger.info("Остановлено пользователем")
+            print("Остановлено пользователем")
+            self.running = False
+            self.price_fetcher.running = False
+        except Exception as e:
+            self.logger.error(f"Неожиданная ошибка в цикле: {e}")
+            print(f"Неожиданная ошибка в цикле: {e}")
+            self.running = False
+            self.price_fetcher.running = False
+
+if __name__ == "__main__":
+    monitor = PriceMonitor()
+    monitor.run()
+
+    import logging
+import time
+import os
+from datetime import datetime
+from bybit_api import BybitAPI
+import requests
+from google_sheets import GoogleSheetsClient  # Импортируем для получения монет
+
+# Закрываем все существующие логгеры, чтобы избежать конфликтов
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
+# Настройка логирования
+log_dir = "logs"
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+# Генерируем уникальное имя файла с временной меткой
+current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+log_file = os.path.join(log_dir, f"fetch_prices_{current_time}.log")
+
+logging.basicConfig(
+    filename=log_file,
+    filemode='w',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    encoding='utf-8',
+    force=True
+)
+
+class PriceFetcher:
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("Инициализация PriceFetcher")
+        print("Инициализация PriceFetcher...")
+
+        # Получаем монеты из Google Sheets
+        google_sheets = GoogleSheetsClient()
+        self.trading_coins = google_sheets.get_trading_coins()
+        self.symbols = [coin["coin"] for coin in self.trading_coins]
+
+        # Логируем список монет
+        self.logger.info(f"Получено {len(self.trading_coins)} монет для мониторинга: {self.symbols}")
+        print(f"Получено {len(self.trading_coins)} монет для мониторинга: {self.symbols}")
+
+        self.bybit_api = BybitAPI()
+        self.current_prices = {symbol: 0.0 for symbol in self.symbols}
+        self.valid_symbols = []
+        self.running = True
+
+    def validate_symbol(self, symbol):
+        """Проверяет валидность символа через REST API."""
+        try:
+            base_url = "https://api.bybit.com"
+            endpoint = "/v5/market/instruments-info"
+            params = {"category": "linear", "symbol": symbol}
+            response = requests.get(base_url + endpoint, params=params)
+            data = response.json()
+            if data["retCode"] == 0 and data["result"]["list"]:
+                self.logger.info(f"Символ {symbol} валиден")
+                print(f"Символ {symbol} валиден")
+                return True
+            self.logger.warning(f"Символ {symbol} не валиден: {data.get('retMsg', 'Нет данных')}")
+            print(f"Символ {symbol} не валиден: {data.get('retMsg', 'Нет данных')}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Ошибка проверки символа {symbol}: {e}")
+            print(f"Ошибка проверки символа {symbol}: {e}")
+            return False
+
+    def handle_price_update(self, symbol, last_price):
+        """Обработка обновления цены."""
+        if symbol in self.valid_symbols:
+            self.current_prices[symbol] = last_price
+            self.logger.debug(f"Обновлена цена для {symbol}: {last_price}")
+            print(f"Обновлена цена для {symbol}: {last_price}")
+
+    def reconnect(self):
+        """Переподключение WebSocket при разрыве."""
+        self.logger.warning("Попытка переподключения WebSocket...")
+        print("Попытка переподключения WebSocket...")
+        self.bybit_api = BybitAPI()
+        self.valid_symbols = []
+        self.subscribe_to_valid_symbols()
+
+    def subscribe_to_valid_symbols(self):
+        """Подписка только на валидные символы."""
+        self.valid_symbols = [s for s in self.symbols if self.validate_symbol(s)]
+        if not self.valid_symbols:
+            self.logger.error("Не удалось найти валидные символы. Завершаем работу.")
+            print("Не удалось найти валидные символы. Завершаем работу.")
+            self.running = False
+            return
+
+        for symbol in self.valid_symbols:
+            try:
+                self.bybit_api.subscribe_to_ticker([symbol], self.handle_price_update)
+                self.logger.info(f"Успешно подписались на {symbol}")
+                print(f"Успешно подписались на {symbol}")
+            except Exception as e:
+                self.logger.error(f"Ошибка подписки на {symbol}: {e}")
+                print(f"Ошибка подписки на {symbol}: {e}")
+
+    def run(self):
+        """Запуск получения цен."""
+        self.logger.info(f"Запуск получения цен для {len(self.symbols)} инструментов: {self.symbols}")
+        print(f"Запуск получения цен для {len(self.symbols)} инструментов: {self.symbols}")
+        
+        # Инициализируем подписку
+        self.subscribe_to_valid_symbols()
+
+        if not self.valid_symbols:
+            return
+
+        # Бесконечный цикл с логированием цен
+        try:
+            self.logger.info("Начало мониторинга цен...")
+            print("Начало мониторинга цен...")
+            while self.running:
+                prices_str = ", ".join(
+                    f"{symbol}: {price}" for symbol, price in self.current_prices.items()
+                    if symbol in self.valid_symbols
+                )
+                self.logger.info(f"Текущие цены: {prices_str}")
+                print(f"Текущие цены: {prices_str}")
+                time.sleep(10)
+        except KeyboardInterrupt:
+            self.logger.info("Остановлено пользователем")
+            print("Остановлено пользователем")
+        except Exception as e:
+            self.logger.error(f"Неожиданная ошибка в цикле: {e}")
+            print(f"Неожиданная ошибка в цикле: {e}")
+            self.reconnect()
+            if self.running:
+                time.sleep(5)
+
+    def get_current_prices(self):
+        """Метод для получения текущих цен."""
+        return self.current_prices
+
+if __name__ == "__main__":
+    fetcher = PriceFetcher()
+    fetcher.run()
