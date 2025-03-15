@@ -2,6 +2,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import logging
 import os
+
 try:
     from config import GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_ID
 except ImportError as e:
@@ -22,7 +23,7 @@ log_file = os.path.join(log_dir, "google_sheets.log")
 
 # Настройка логирования с выводом в консоль и файл
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Установлен уровень DEBUG для детального вывода
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(log_file, mode='a', encoding='utf-8'),
@@ -164,80 +165,119 @@ class GoogleSheetsClient:
         print(f"Найдено {len(trading_coins)} монет для мониторинга")
         return trading_coins
 
-    def get_pending_trades(self, sheet_name):
-        """Получает строки с TRUE в столбце F (Вход в сделку) из указанного листа."""
-        logging.info(f"Получение ожидающих сделок из листа: {sheet_name}")
-        print(f"Получение ожидающих сделок из листа: {sheet_name}")
-        sheet = self.get_sheet(sheet_name)
-        if not sheet:
-            logging.error(f"Не удалось получить лист {sheet_name}")
-            print(f"Не удалось получить лист {sheet_name}")
-            return []
-
-        # Получаем данные из нужных столбцов
-        try:
-            trade_entry_col = sheet.col_values(6)  # F: Вход в сделку (индекс 6, нумерация с 1)
-            status_col = sheet.col_values(7)       # G: Статус сделки
-            coin_col = sheet.col_values(8)         # H: Монета
-            entry_price_col = sheet.col_values(25) # Y: Т вх (Цена Ордера)
-            qty_col = sheet.col_values(26)         # Z: Кол. монет
-            take_profit_col = sheet.col_values(27) # AA: Тейк-профит
-            stop_loss_col = sheet.col_values(28)   # AB: Стоп-лосс
-        except Exception as e:
-            logging.error(f"Ошибка при чтении столбцов из листа {sheet_name}: {str(e)}")
-            print(f"Ошибка при чтении столбцов из листа {sheet_name}: {str(e)}")
-            return []
-
+    def get_pending_trades(self):
+        """Получает список сделок для входа с вкладок long и short."""
+        logging.info("Начало выполнения get_pending_trades")
+        print("Начало выполнения get_pending_trades")
         pending_trades = []
-        for idx, entry in enumerate(trade_entry_col[1:], start=2):  # Пропускаем заголовок
-            if entry.strip().upper() not in ["TRUE", "TRU"]:
-                continue
-            if idx > len(status_col) or status_col[idx-1].strip():  # Пропускаем, если статус уже заполнен
-                continue
 
+        # Проверяем вкладки long и short
+        for sheet_name in ["long", "short"]:
+            logging.info(f"Попытка получить лист: {sheet_name}")
+            print(f"Попытка получить лист: {sheet_name}")
             try:
-                coin = coin_col[idx-1] if idx <= len(coin_col) else None
-                entry_price = entry_price_col[idx-1] if idx <= len(entry_price_col) else None
-                qty = qty_col[idx-1] if idx <= len(qty_col) else None
-                take_profit = take_profit_col[idx-1] if idx <= len(take_profit_col) else None
-                stop_loss = stop_loss_col[idx-1] if idx <= len(stop_loss_col) else None
+                worksheet = self.spreadsheet.worksheet(sheet_name)
 
-                # Проверяем и преобразуем числовые значения
-                try:
-                    entry_price = float(entry_price) if entry_price and entry_price != '#N/A' else None
-                    qty = float(qty) if qty and qty != '#N/A' else None
-                    take_profit = float(take_profit) if take_profit and take_profit != '#N/A' else None
-                    stop_loss = float(stop_loss) if stop_loss and stop_loss != '#N/A' else None
-                except ValueError as e:
-                    logging.error(f"Ошибка преобразования данных в строке {idx}: {e}")
-                    print(f"Ошибка преобразования данных в строке {idx}: {e}")
-                    continue
+                # Получаем данные из нужных колонок
+                trade_entry_col = worksheet.col_values(6)  # F: Вход в сделку (индекс 6)
+                status_col = worksheet.col_values(7)       # G: Статус сделки (индекс 7)
+                coin_col = worksheet.col_values(8)         # H: Монета (индекс 8)
+                entry_price_col = worksheet.col_values(25) # Y: Т вх (индекс 25)
+                qty_col = worksheet.col_values(26)         # Z: Кол. монет (индекс 26)
+                take_profit_col = worksheet.col_values(27) # AA: Тейк-профит (индекс 27)
+                stop_loss_col = worksheet.col_values(28)   # AB: Стоп-лосс (индекс 28)
 
-                if not all([coin, entry_price, qty]):  # Проверяем обязательные параметры
-                    logging.warning(f"Недостаточно данных в строке {idx}: coin={coin}, entry_price={entry_price}, qty={qty}")
-                    print(f"Недостаточно данных в строке {idx}: coin={coin}, entry_price={entry_price}, qty={qty}")
-                    continue
+                # Находим строки, где в столбце "Вход в сделку" стоит TRUE
+                trade_indices = [i for i, val in enumerate(trade_entry_col) if val.strip().upper() == "TRUE"]
+                logging.info(f"Найдено строк с TRUE на листе {sheet_name}: {len(trade_indices)} на индексах: {trade_indices}")
+                print(f"Найдено строк с TRUE на листе {sheet_name}: {len(trade_indices)} на индексах: {trade_indices}")
 
-                trade = {
-                    "row_idx": idx,
-                    "coin": coin,
-                    "entry_price": entry_price,
-                    "qty": qty,
-                    "take_profit": take_profit,
-                    "stop_loss": stop_loss,
-                    "side": "Buy" if sheet_name.lower() == "long" else "Sell"
-                }
-                pending_trades.append(trade)
-                logging.info(f"Найдена ожидающая сделка: {trade}")
-                print(f"Найдена ожидающая сделка: {trade}")
+                for idx in trade_indices:
+                    row_idx = idx + 1  # Индекс строки в Google Sheets (начинается с 1)
+                    logging.debug(f"Обработка строки {row_idx}, значение F: '{trade_entry_col[idx]}'")
+                    print(f"Обработка строки {row_idx}, значение F: '{trade_entry_col[idx]}'")
+
+                    # Проверяем, не обработана ли уже эта строка (статус не пустой и не указан как "отменено")
+                    status = status_col[idx] if idx < len(status_col) else ""
+                    if status.strip() in ["вход, ожидание", "отменено: лимит сделок"]:
+                        logging.debug(f"Строка {row_idx} пропущена: статус '{status}'")
+                        print(f"Строка {row_idx} пропущена: статус '{status}'")
+                        continue
+
+                    try:
+                        coin = coin_col[idx] if idx < len(coin_col) else None
+                        entry_price = entry_price_col[idx] if idx < len(entry_price_col) else None
+                        qty = qty_col[idx] if idx < len(qty_col) else None
+                        take_profit = take_profit_col[idx] if idx < len(take_profit_col) else None
+                        stop_loss = stop_loss_col[idx] if idx < len(stop_loss_col) else None
+
+                        logging.debug(f"Строка {row_idx} данные: coin={coin}, entry_price={entry_price}, qty={qty}, take_profit={take_profit}, stop_loss={stop_loss}")
+
+                        try:
+                            entry_price = float(entry_price) if entry_price and entry_price != '#N/A' else None
+                            qty = float(qty) if qty and qty != '#N/A' else None
+                            take_profit = float(take_profit) if take_profit and take_profit != '#N/A' else None
+                            stop_loss = float(stop_loss) if stop_loss and stop_loss != '#N/A' else None
+                        except ValueError as e:
+                            logging.error(f"Ошибка преобразования данных в строке {row_idx}: {e}")
+                            print(f"Ошибка преобразования данных в строке {row_idx}: {e}")
+                            continue
+
+                        # Проверяем, что все обязательные параметры присутствуют
+                        if not all([coin, entry_price, qty, stop_loss]):
+                            logging.warning(f"Пропущены обязательные параметры в строке {row_idx} листа {sheet_name}: coin={coin}, entry_price={entry_price}, qty={qty}, stop_loss={stop_loss}")
+                            print(f"Пропущены обязательные параметры в строке {row_idx} листа {sheet_name}: coin={coin}, entry_price={entry_price}, qty={qty}, stop_loss={stop_loss}")
+                            continue
+
+                        pending_trades.append({
+                            "sheet": sheet_name,
+                            "row": row_idx,
+                            "coin": coin,
+                            "entry_price": entry_price,
+                            "qty": qty,
+                            "take_profit": take_profit,
+                            "stop_loss": stop_loss,
+                            "side": "Buy" if sheet_name.lower() == "long" else "Sell"
+                        })
+                        logging.info(f"Добавлена сделка для обработки: {sheet_name}, строка {row_idx}, монета {coin}")
+                        print(f"Добавлена сделка для обработки: {sheet_name}, строка {row_idx}, монета {coin}")
+                    except Exception as e:
+                        logging.error(f"Ошибка при обработке строки {row_idx} на листе {sheet_name}: {e}")
+                        print(f"Ошибка при обработке строки {row_idx} на листе {sheet_name}: {e}")
+                        continue
+
             except Exception as e:
-                logging.error(f"Ошибка при обработке строки {idx}: {str(e)}")
-                print(f"Ошибка при обработке строки {idx}: {str(e)}")
+                logging.error(f"Ошибка при обработке листа {sheet_name}: {e}")
+                print(f"Ошибка при обработке листа {sheet_name}: {e}")
                 continue
 
-        logging.info(f"Всего найдено ожидающих сделок: {len(pending_trades)}")
-        print(f"Всего найдено ожидающих сделок: {len(pending_trades)}")
+        logging.info(f"Найдено {len(pending_trades)} сделок для входа")
+        print(f"Найдено {len(pending_trades)} сделок для входа")
         return pending_trades
+
+    def update_trade_status(self, sheet_name, row, status):
+        """Обновляет статус сделки в столбце G."""
+        try:
+            worksheet = self.spreadsheet.worksheet(sheet_name)
+            worksheet.update_cell(row, 7, status)  # Столбец G (7-й)
+            logging.info(f"Статус сделки обновлен: лист {sheet_name}, строка {row}, статус {status}")
+            print(f"Статус сделки обновлен: лист {sheet_name}, строка {row}, статус {status}")
+        except Exception as e:
+            logging.error(f"Ошибка при обновлении статуса в листе {sheet_name}, строка {row}: {e}")
+            print(f"Ошибка при обновлении статуса в листе {sheet_name}, строка {row}: {e}")
+            raise
+
+    def cancel_trade(self, sheet_name, row):
+        """Отменяет сделку (сбрасывает F в FALSE)."""
+        try:
+            worksheet = self.spreadsheet.worksheet(sheet_name)
+            worksheet.update_cell(row, 6, "FALSE")  # Столбец F (6-й)
+            logging.info(f"Сделка отменена: лист {sheet_name}, строка {row}")
+            print(f"Сделка отменена: лист {sheet_name}, строка {row}")
+        except Exception as e:
+            logging.error(f"Ошибка при отмене сделки в листе {sheet_name}, строка {row}: {e}")
+            print(f"Ошибка при отмене сделки в листе {sheet_name}, строка {row}: {e}")
+            raise
 
 if __name__ == "__main__":
     print("Запуск тестового скрипта...")
@@ -256,9 +296,8 @@ if __name__ == "__main__":
             print(coin)
 
         # Тест метода get_pending_trades для листов "long" и "short"
-        for sheet_name in ["long", "short"]:
-            trades = client.get_pending_trades(sheet_name)
-            print(f"Ожидающие сделки на листе {sheet_name}: {trades}")
+        trades = client.get_pending_trades()
+        print(f"Ожидающие сделки: {trades}")
 
     except Exception as e:
         print(f"Произошла ошибка: {str(e)}")
