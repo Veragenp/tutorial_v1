@@ -5,10 +5,11 @@ import requests
 
 class BybitAPI:
     def __init__(self, api_key=None, api_secret=None):
-        self.logger = logging.getLogger(__name__)  # Инициализация logger внутри класса
+        self.logger = logging.getLogger(__name__)
         self.session = HTTP(
             api_key=api_key,
-            api_secret=api_secret
+            api_secret=api_secret,
+            testnet=False
         )
         self.ws = WebSocket(testnet=False, channel_type="linear")
 
@@ -97,9 +98,9 @@ class BybitAPI:
                 cursor = response['result'].get('nextPageCursor')
                 
                 self.logger.info(f"Получено {len(instruments)} символов, всего: {len(all_symbols)}")
-                if not cursor or len(instruments) < limit:  # Нет следующей страницы или конец списка
+                if not cursor or len(instruments) < limit:
                     break
-                time.sleep(0.1)  # Задержка для соблюдения лимитов API
+                time.sleep(0.1)
             
             self.logger.info(f"Всего получено {len(all_symbols)} фьючерсных инструментов")
             return all_symbols
@@ -117,3 +118,54 @@ class BybitAPI:
 
         for symbol in symbols:
             self.ws.ticker_stream(symbol=symbol, callback=handle_message)
+
+    def get_open_positions(self):
+        """Возвращает количество открытых позиций."""
+        try:
+            response = self.session.get_positions(category="linear", settleCoin="USDT")
+            if response['retCode'] == 0:
+                positions = [pos for pos in response['result']['list'] if float(pos['size']) > 0]
+                self.logger.info(f"Открытых позиций: {len(positions)}")
+                return len(positions)
+            self.logger.error(f"Ошибка получения позиций: {response['retMsg']}")
+            return 0
+        except Exception as e:
+            self.logger.error(f"Ошибка при получении позиций: {e}")
+            return 0
+
+    def place_limit_order(self, symbol, side, qty, price, take_profit=None, stop_loss=None):
+        """Размещает лимитный ордер."""
+        try:
+            response = self.session.place_order(
+                category="linear",
+                symbol=symbol,
+                side=side,
+                orderType="Limit",
+                qty=str(qty),
+                price=str(price),
+                timeInForce="GTC",
+                takeProfit=str(take_profit) if take_profit else None,
+                stopLoss=str(stop_loss) if stop_loss else None
+            )
+            if response['retCode'] == 0:
+                order_id = response['result']['orderId']
+                self.logger.info(f"Ордер размещен: {order_id}")
+                return order_id
+            self.logger.error(f"Ошибка размещения ордера: {response['retMsg']}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Ошибка при размещении ордера: {e}")
+            return None
+
+    def cancel_all_orders(self):
+        """Отменяет все открытые ордеры."""
+        try:
+            response = self.session.cancel_all_orders(category="linear")
+            if response['retCode'] == 0:
+                self.logger.info(f"Все ордеры отменены: {len(response['result']['list'])} ордеров")
+                return True
+            self.logger.error(f"Ошибка отмены ордеров: {response['retMsg']}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Ошибка при отмене ордеров: {e}")
+            return False

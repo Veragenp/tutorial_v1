@@ -18,15 +18,15 @@ print(f"Текущая директория: {os.getcwd()}")
 print(f"Путь к папке логов: {log_dir}")
 
 # Путь к файлу логов
-log_file = os.path.join(log_dir, "debug.log")
+log_file = os.path.join(log_dir, "google_sheets.log")
 
 # Настройка логирования с выводом в консоль и файл
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_file, mode='a', encoding='utf-8'),  # Указываем кодировку UTF-8
-        logging.StreamHandler()  # Логи в консоль
+        logging.FileHandler(log_file, mode='a', encoding='utf-8'),
+        logging.StreamHandler()
     ]
 )
 
@@ -86,12 +86,23 @@ class GoogleSheetsClient:
         return sheets
 
     def update_cell(self, sheet, row, col, value):
-        sheet.update_cell(row, col, value)
+        try:
+            sheet.update_cell(row, col, value)
+            logging.info(f"Обновлена ячейка: строка {row}, столбец {col}, значение {value}")
+            print(f"Обновлена ячейка: строка {row}, столбец {col}, значение {value}")
+        except Exception as e:
+            logging.error(f"Ошибка при обновлении ячейки: строка {row}, столбец {col}, значение {value}: {str(e)}")
+            print(f"Ошибка при обновлении ячейки: строка {row}, столбец {col}, значение {value}: {str(e)}")
 
     def get_all_data(self, sheet):
         logging.info("Чтение всех данных из листа")
         print("Чтение всех данных из листа")
-        return sheet.get_all_values()
+        try:
+            return sheet.get_all_values()
+        except Exception as e:
+            logging.error(f"Ошибка при чтении данных из листа: {str(e)}")
+            print(f"Ошибка при чтении данных из листа: {str(e)}")
+            return []
 
     def get_trading_coins(self):
         logging.info("Начало выполнения get_trading_coins")
@@ -102,9 +113,8 @@ class GoogleSheetsClient:
             print("Не удалось получить лист analitics")
             return []
 
-        # Получаем только столбец "Торговля" (D, индекс 3)
         try:
-            trading_column = sheet.col_values(4)  # 4 - индекс столбца D (нумерация с 1)
+            trading_column = sheet.col_values(4)  # Столбец D (индекс 4)
             logging.info(f"Получен столбец Торговля: {trading_column[:5]}... (первые 5 значений)")
             print(f"Получен столбец Торговля: {trading_column[:5]}... (первые 5 значений)")
         except Exception as e:
@@ -112,7 +122,6 @@ class GoogleSheetsClient:
             print(f"Ошибка при получении столбца Торговля: {str(e)}")
             return []
 
-        # Определяем индексы строк, где Торговля = TRUE
         valid_rows = [i for i, status in enumerate(trading_column[1:], start=2) if status.strip().upper() in ["TRUE", "TRU"]]
         logging.info(f"Найдено строк с TRUE: {len(valid_rows)} на индексах: {valid_rows}")
         print(f"Найдено строк с TRUE: {len(valid_rows)} на индексах: {valid_rows}")
@@ -122,7 +131,6 @@ class GoogleSheetsClient:
             print("Нет строк с Торговля = TRUE")
             return []
 
-        # Загружаем только нужные строки
         trading_coins = []
         for row_idx in valid_rows:
             try:
@@ -132,7 +140,6 @@ class GoogleSheetsClient:
                     long_level = row_data[9]  # Столбец J (индекс 9) — "Уровень 1 - LONG"
                     short_level = row_data[12]  # Столбец M (индекс 12) — "Уровень 1 - SHORT"
 
-                    # Обрабатываем возможные ошибки преобразования
                     try:
                         long_level = float(long_level) if long_level and long_level != '#N/A' else None
                         short_level = float(short_level) if short_level and short_level != '#N/A' else None
@@ -167,33 +174,33 @@ class GoogleSheetsClient:
             print(f"Не удалось получить лист {sheet_name}")
             return []
 
-        # Получаем все данные
+        # Получаем данные из нужных столбцов
         try:
-            all_data = sheet.get_all_values()
-            if not all_data or len(all_data) < 2:
-                logging.warning(f"Лист {sheet_name} пуст или содержит только заголовки")
-                print(f"Лист {sheet_name} пуст или содержит только заголовки")
-                return []
+            trade_entry_col = sheet.col_values(6)  # F: Вход в сделку (индекс 6, нумерация с 1)
+            status_col = sheet.col_values(7)       # G: Статус сделки
+            coin_col = sheet.col_values(8)         # H: Монета
+            entry_price_col = sheet.col_values(25) # Y: Т вх (Цена Ордера)
+            qty_col = sheet.col_values(26)         # Z: Кол. монет
+            take_profit_col = sheet.col_values(27) # AA: Тейк-профит
+            stop_loss_col = sheet.col_values(28)   # AB: Стоп-лосс
         except Exception as e:
-            logging.error(f"Ошибка при чтении данных из листа {sheet_name}: {str(e)}")
-            print(f"Ошибка при чтении данных из листа {sheet_name}: {str(e)}")
+            logging.error(f"Ошибка при чтении столбцов из листа {sheet_name}: {str(e)}")
+            print(f"Ошибка при чтении столбцов из листа {sheet_name}: {str(e)}")
             return []
 
-        # Определяем индексы строк с TRUE в столбце F (индекс 5, нумерация с 0)
         pending_trades = []
-        for row_idx, row in enumerate(all_data[1:], start=2):  # Пропускаем заголовок
-            if len(row) < 28:  # Убедимся, что строка содержит достаточно столбцов (до AB)
+        for idx, entry in enumerate(trade_entry_col[1:], start=2):  # Пропускаем заголовок
+            if entry.strip().upper() not in ["TRUE", "TRU"]:
                 continue
-            entry_trigger = row[5].strip().upper()  # Столбец F (индекс 5)
-            if entry_trigger not in ["TRUE", "TRU"]:
+            if idx > len(status_col) or status_col[idx-1].strip():  # Пропускаем, если статус уже заполнен
                 continue
 
             try:
-                coin = row[7]  # Столбец H (индекс 7) — Монета
-                entry_price = row[24] if row[24] else None  # Столбец Y (индекс 24) — Т вх (Цена Ордера)
-                qty = row[25] if row[25] else None  # Столбец Z (индекс 25) — Кол. монет
-                take_profit = row[26] if row[26] else None  # Столбец AA (индекс 26) — Тейк-профит
-                stop_loss = row[27] if row[27] else None  # Столбец AB (индекс 27) — Стоп-лосс
+                coin = coin_col[idx-1] if idx <= len(coin_col) else None
+                entry_price = entry_price_col[idx-1] if idx <= len(entry_price_col) else None
+                qty = qty_col[idx-1] if idx <= len(qty_col) else None
+                take_profit = take_profit_col[idx-1] if idx <= len(take_profit_col) else None
+                stop_loss = stop_loss_col[idx-1] if idx <= len(stop_loss_col) else None
 
                 # Проверяем и преобразуем числовые значения
                 try:
@@ -202,30 +209,30 @@ class GoogleSheetsClient:
                     take_profit = float(take_profit) if take_profit and take_profit != '#N/A' else None
                     stop_loss = float(stop_loss) if stop_loss and stop_loss != '#N/A' else None
                 except ValueError as e:
-                    logging.error(f"Ошибка преобразования данных в строке {row_idx}: {e}")
-                    print(f"Ошибка преобразования данных в строке {row_idx}: {e}")
+                    logging.error(f"Ошибка преобразования данных в строке {idx}: {e}")
+                    print(f"Ошибка преобразования данных в строке {idx}: {e}")
                     continue
 
                 if not all([coin, entry_price, qty]):  # Проверяем обязательные параметры
-                    logging.warning(f"Недостаточно данных в строке {row_idx}: {row}")
-                    print(f"Недостаточно данных в строке {row_idx}: {row}")
+                    logging.warning(f"Недостаточно данных в строке {idx}: coin={coin}, entry_price={entry_price}, qty={qty}")
+                    print(f"Недостаточно данных в строке {idx}: coin={coin}, entry_price={entry_price}, qty={qty}")
                     continue
 
                 trade = {
-                    "row_idx": row_idx,
+                    "row_idx": idx,
                     "coin": coin,
                     "entry_price": entry_price,
                     "qty": qty,
                     "take_profit": take_profit,
                     "stop_loss": stop_loss,
-                    "side": "Buy" if sheet_name.lower() == "long" else "Sell"  # Определяем сторону сделки
+                    "side": "Buy" if sheet_name.lower() == "long" else "Sell"
                 }
                 pending_trades.append(trade)
                 logging.info(f"Найдена ожидающая сделка: {trade}")
                 print(f"Найдена ожидающая сделка: {trade}")
             except Exception as e:
-                logging.error(f"Ошибка при обработке строки {row_idx}: {str(e)}")
-                print(f"Ошибка при обработке строки {row_idx}: {str(e)}")
+                logging.error(f"Ошибка при обработке строки {idx}: {str(e)}")
+                print(f"Ошибка при обработке строки {idx}: {str(e)}")
                 continue
 
         logging.info(f"Всего найдено ожидающих сделок: {len(pending_trades)}")
@@ -242,13 +249,13 @@ if __name__ == "__main__":
         sheets = client.list_sheets()
         print(f"Доступные листы в таблице: {sheets}")
 
-        # Вызываем get_trading_coins для листа "analitics" (предыдущая логика)
+        # Вызываем get_trading_coins для листа "analitics"
         coins = client.get_trading_coins()
         print(f"Найдено монет: {len(coins)}")
         for coin in coins:
             print(coin)
 
-        # Тест нового метода для листов "long" и "short"
+        # Тест метода get_pending_trades для листов "long" и "short"
         for sheet_name in ["long", "short"]:
             trades = client.get_pending_trades(sheet_name)
             print(f"Ожидающие сделки на листе {sheet_name}: {trades}")

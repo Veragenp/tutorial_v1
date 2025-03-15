@@ -13,5 +13,9 @@ logging.basicConfig(
 )
 
 if __name__ == "__main__":
-    trade_manager = TradeManager(BYBIT_API_KEY, BYBIT_API_SECRET, TELEGRAM_TOKEN, CHAT_ID)
-    trade_manager.run()
+    try:
+        trade_manager = TradeManager(BYBIT_API_KEY, BYBIT_API_SECRET, TELEGRAM_TOKEN, CHAT_ID)
+        trade_manager.run()
+    except Exception as e:
+        logging.error(f"Ошибка при запуске TradeManager: {e}")
+        print(f"Ошибка при запуске TradeManager: {e}")

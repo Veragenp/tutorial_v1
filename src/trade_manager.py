@@ -1,6 +1,6 @@
 import logging
 import time
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, filters
 from bybit_api import BybitAPI
 from google_sheets import GoogleSheetsClient
 from telegram_bot import send_telegram_message
@@ -19,7 +19,7 @@ class TradeManager:
         # Настройка Telegram-бота для подтверждений
         self.app = Application.builder().token(telegram_token).build()
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_confirmation))
-        self.app.run_polling()
+        self.app.run_polling(allowed_updates=[])
 
     async def handle_confirmation(self, update, context):
         """Обрабатывает ответы да/нет от пользователя в Telegram."""
@@ -32,7 +32,6 @@ class TradeManager:
             await update.message.reply_text("Пожалуйста, ответьте 'да' или 'нет'.")
             return
 
-        # Проверяем, есть ли ожидающая сделка
         if chat_id in self.pending_confirmation:
             trade_data = self.pending_confirmation[chat_id]
             if message == "да":
@@ -52,14 +51,12 @@ class TradeManager:
             self.logger.error(f"Не удалось получить лист {sheet_name}")
             return
 
-        # Проверяем лимит на открытые сделки
+        # Проверяем количество открытых позиций
         open_positions = self.bybit.get_open_positions()
+        self.logger.info(f"Открытых позиций: {open_positions}")
         if open_positions >= self.max_trades:
-            for trade in trades:
-                row_idx = trade["row_idx"]
-                self.sheets.update_cell(sheet, row_idx, 6, "FALSE")  # Столбец F
-                self.sheets.update_cell(sheet, row_idx, 7, "отменено: лимит сделок")  # Столбец G
-                send_telegram_message(f"Сделка для {trade['coin']} отменена: достигнут лимит в {self.max_trades} сделок.")
+            self.logger.warning(f"Достигнут лимит открытых сделок ({self.max_trades})")
+            self.cancel_all_pending_trades(sheet_name)
             return
 
         for trade in trades:
@@ -98,6 +95,13 @@ class TradeManager:
         sheet = trade_data["sheet"]
         sheet_name = trade_data["sheet_name"]
 
+        # Проверяем лимит еще раз перед выполнением
+        open_positions = self.bybit.get_open_positions()
+        if open_positions >= self.max_trades:
+            self.logger.warning(f"Достигнут лимит открытых сделок ({self.max_trades}) при выполнении")
+            self.cancel_all_pending_trades(sheet_name)
+            return
+
         order_id = self.bybit.place_limit_order(
             symbol=trade["coin"],
             side=trade["side"],
@@ -111,6 +115,7 @@ class TradeManager:
         if order_id:
             self.sheets.update_cell(sheet, row_idx, 7, "вход выполнен")  # Столбец G
             send_telegram_message(f"Сделка для {trade['coin']} ({sheet_name}) выполнена. Order ID: {order_id}")
+            send_telegram_message("Стоп-лосс установлен")
         else:
             self.sheets.update_cell(sheet, row_idx, 6, "FALSE")  # Столбец F
             self.sheets.update_cell(sheet, row_idx, 7, "ошибка входа")  # Столбец G
@@ -124,6 +129,23 @@ class TradeManager:
         self.sheets.update_cell(sheet, row_idx, 6, "FALSE")  # Столбец F
         self.sheets.update_cell(sheet, row_idx, 7, reason)  # Столбец G
         send_telegram_message(f"Сделка для {trade['coin']} отменена: {reason}")
+
+    def cancel_all_pending_trades(self, sheet_name):
+        """Отменяет все ожидающие сделки на указанном листе."""
+        sheet = self.sheets.get_sheet(sheet_name)
+        if not sheet:
+            self.logger.error(f"Не удалось получить лист {sheet_name} для отмены сделок")
+            return
+
+        trades = self.sheets.get_pending_trades(sheet_name)
+        if self.bybit.cancel_all_orders():
+            for trade in trades:
+                row_idx = trade["row_idx"]
+                self.sheets.update_cell(sheet, row_idx, 6, "FALSE")  # Столбец F
+                self.sheets.update_cell(sheet, row_idx, 7, "отменено: лимит сделок")  # Столбец G
+                send_telegram_message(f"Сделка для {trade['coin']} отменена: достигнут лимит в {self.max_trades} сделок.")
+        else:
+            self.logger.error("Не удалось отменить ордеры через Bybit API")
 
     def run(self):
         """Запускает цикл проверки Google Sheets на наличие новых сделок."""
