@@ -38,7 +38,6 @@ class TradeManager:
         self.max_trades = 5
         self.running = True
 
-        # Настройка Telegram-бота
         try:
             self.app = Application.builder().token(telegram_token).build()
             self.logger.info("Telegram Application инициализирован")
@@ -47,13 +46,13 @@ class TradeManager:
             raise
 
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_confirmation))
-        self.app.add_handler(CallbackQueryHandler(self.handle_button))  # Обработчик кнопок
+        self.app.add_handler(CallbackQueryHandler(self.handle_button))
 
     async def handle_confirmation(self, update, context):
-        """Обрабатывает текстовые ответы да/нет от пользователя в Telegram."""
         self.logger.debug("Получен ответ от пользователя в Telegram")
         message = update.message.text.lower()
         chat_id = update.effective_chat.id
+        message_id = update.message.message_id
 
         if chat_id != int(self.chat_id):
             self.logger.warning(f"Получен ответ от неизвестного chat_id: {chat_id}")
@@ -64,8 +63,9 @@ class TradeManager:
             await update.message.reply_text("Пожалуйста, ответьте 'да' или 'нет'.")
             return
 
-        if chat_id in self.pending_confirmation:
-            trade_data = self.pending_confirmation[chat_id]
+        key = (chat_id, message_id)
+        if key in self.pending_confirmation:
+            trade_data = self.pending_confirmation[key]
             if message == "да":
                 self.logger.info(f"Сделка подтверждена пользователем: {trade_data['trade']['coin']}")
                 self.execute_trade(trade_data)
@@ -74,25 +74,22 @@ class TradeManager:
                 self.logger.info(f"Сделка отменена пользователем: {trade_data['trade']['coin']}")
                 self.cancel_trade(trade_data, "отменено: пользователь отказался")
                 await update.message.reply_text("Сделка отменена.")
-            del self.pending_confirmation[chat_id]
+            del self.pending_confirmation[key]
         else:
             self.logger.warning("Нет ожидающих сделок для подтверждения")
             await update.message.reply_text("Нет ожидающих сделок для подтверждения.")
 
     async def handle_button(self, update, context):
-        """Обрабатывает нажатия на кнопки 'Да' и 'Нет'."""
         query = update.callback_query
-        await query.answer()  # Подтверждаем обработку кнопки
+        await query.answer()
 
         chat_id = query.message.chat_id
-        action = query.data  # "yes" или "no"
+        message_id = query.message.message_id
+        action = query.data
 
-        if chat_id != int(self.chat_id):
-            self.logger.warning(f"Получен ответ от неизвестного chat_id: {chat_id}")
-            return
-
-        if chat_id in self.pending_confirmation:
-            trade_data = self.pending_confirmation[chat_id]
+        key = (chat_id, message_id)
+        if key in self.pending_confirmation:
+            trade_data = self.pending_confirmation[key]
             if action == "yes":
                 self.logger.info(f"Сделка подтверждена пользователем (кнопка): {trade_data['trade']['coin']}")
                 self.execute_trade(trade_data)
@@ -101,13 +98,12 @@ class TradeManager:
                 self.logger.info(f"Сделка отменена пользователем (кнопка): {trade_data['trade']['coin']}")
                 self.cancel_trade(trade_data, "отменено: пользователь отказался")
                 await query.message.reply_text("Сделка отменена.")
-            del self.pending_confirmation[chat_id]
+            del self.pending_confirmation[key]
         else:
             self.logger.warning("Нет ожидающих сделок для подтверждения")
             await query.message.reply_text("Нет ожидающих сделок для подтверждения.")
 
     def send_telegram_message(self, text, with_buttons=False):
-        """Отправляет сообщение в Telegram синхронно через requests с кнопками или без."""
         url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
         payload = {
             "chat_id": self.chat_id,
@@ -124,18 +120,20 @@ class TradeManager:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             payload["reply_markup"] = reply_markup.to_dict()
-            self.logger.debug(f"Кнопки добавлены: {keyboard}")  # Отладочный лог
+            self.logger.debug(f"Кнопки добавлены: {keyboard}")
 
         self.logger.debug(f"Отправка сообщения в Telegram: URL={url}, Payload={payload}")
         try:
             response = requests.post(url, json=payload)
             response.raise_for_status()
             self.logger.info(f"Сообщение отправлено в Telegram: {text}")
+            message_id = response.json().get("result", {}).get("message_id")
+            return message_id
         except Exception as e:
             self.logger.error(f"Ошибка при отправке сообщения в Telegram: {e}")
+            return None
 
     def process_pending_trades(self, trades):
-        """Обрабатывает ожидающие сделки."""
         open_positions = self.bybit.get_open_positions()
         self.logger.info(f"Открытых позиций: {open_positions}")
         print(f"Открытых позиций: {open_positions}")
@@ -167,6 +165,15 @@ class TradeManager:
                 self.send_telegram_message(f"Сделка для {trade['coin']} отменена: стоп-лосс не установлен.")
                 continue
 
+            trade_key = (trade["sheet"], trade["row"])
+            already_pending = any(
+                data["trade"]["sheet"] == trade["sheet"] and data["trade"]["row"] == trade["row"]
+                for data in self.pending_confirmation.values()
+            )
+            if already_pending:
+                self.logger.debug(f"Сделка {trade['coin']} уже ожидает подтверждения, пропускаем")
+                continue
+
             row_idx = trade["row"]
             self.sheets.update_trade_status(sheet_name, row_idx, "вход, ожидание")
 
@@ -177,17 +184,20 @@ class TradeManager:
                 f"Количество: {trade['qty']}\n"
                 f"Тейк-профит: {trade['take_profit'] if trade['take_profit'] else 'не установлен'}\n"
                 f"Стоп-лосс: {trade['stop_loss']}\n"
-            )  # Убрал "Ответьте 'да' или 'нет'."
+            )
             self.logger.info(f"Отправка запроса на подтверждение: {trade['coin']}")
-            self.send_telegram_message(message, with_buttons=True)  # Явно передаем with_buttons=True
-            self.pending_confirmation[int(self.chat_id)] = {
-                "trade": trade,
-                "sheet": sheet,
-                "sheet_name": sheet_name
-            }
+            message_id = self.send_telegram_message(message, with_buttons=True)
+            if message_id:
+                key = (int(self.chat_id), message_id)
+                self.pending_confirmation[key] = {
+                    "trade": trade,
+                    "sheet": sheet,
+                    "sheet_name": sheet_name
+                }
+            else:
+                self.logger.error(f"Не удалось получить message_id для сделки {trade['coin']}")
 
     def execute_trade(self, trade_data):
-        """Выполняет сделку после подтверждения."""
         trade = trade_data["trade"]
         sheet = trade_data["sheet"]
         sheet_name = trade_data["sheet_name"]
@@ -210,25 +220,25 @@ class TradeManager:
         row_idx = trade["row"]
         if order_id:
             self.sheets.update_trade_status(sheet_name, row_idx, "вход выполнен")
+            self.sheets.update_cell(sheet, row_idx, 6, "FALSE")  # Сбрасываем флаг TRUE
             self.send_telegram_message(f"Сделка для {trade['coin']} ({sheet_name}) выполнена. Order ID: {order_id}")
             self.send_telegram_message("Стоп-лосс установлен")
         else:
-            self.sheets.update_cell(sheet, row_idx, 6, "FALSE")
+            self.sheets.update_cell(sheet, row_idx, 6, "FALSE")  # Сбрасываем флаг TRUE
             self.sheets.update_trade_status(sheet_name, row_idx, "ошибка входа")
             self.send_telegram_message(f"Ошибка входа в сделку для {trade['coin']} ({sheet_name}).")
 
     def cancel_trade(self, trade_data, reason):
-        """Отменяет сделку."""
         trade = trade_data["trade"]
         sheet = trade_data["sheet"]
         sheet_name = trade_data["sheet_name"]
         row_idx = trade["row"]
         self.sheets.cancel_trade(sheet_name, row_idx)
         self.sheets.update_trade_status(sheet_name, row_idx, reason)
+        self.sheets.update_cell(sheet, row_idx, 6, "FALSE")  # Сбрасываем флаг TRUE
         self.send_telegram_message(f"Сделка для {trade['coin']} отменена: {reason}")
 
     def check_trades(self):
-        """Проверяет Google Sheets на наличие новых сделок."""
         try:
             while self.running:
                 try:
@@ -254,16 +264,13 @@ class TradeManager:
             self.running = False
 
     def run(self):
-        """Запускает TradeManager."""
         self.logger.info("Запуск TradeManager...")
         print("Запуск TradeManager...")
 
-        # Запускаем цикл проверки сделок в отдельном потоке
         check_thread = threading.Thread(target=self.check_trades)
         check_thread.daemon = True
         check_thread.start()
 
-        # Запускаем Telegram polling в основном потоке
         try:
             self.app.run_polling(allowed_updates=[])
         except Exception as e:
