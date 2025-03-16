@@ -1,6 +1,6 @@
 import logging
 from trade_manager import TradeManager
-from config import BYBIT_API_KEY, BYBIT_API_SECRET, TELEGRAM_TOKEN, CHAT_ID
+from config import BYBIT_API_KEY, BYBIT_API_SECRET, TELEGRAM_TOKEN, CHAT_ID  # Используем CHAT_ID вместо TELEGRAM_CHAT_ID
 
 # Настройка логирования
 logging.basicConfig(
