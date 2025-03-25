@@ -40,17 +40,17 @@ except Exception as e:
     logging.error(f"Ошибка настройки лога: {str(e)}")
 
 class GoogleSheetsClient:
-    def __init__(self):
+    def __init__(self, credentials_file, spreadsheet_id):
         logging.info("Инициализация GoogleSheetsClient")
         print("Инициализация GoogleSheetsClient")
-        logging.info(f"GOOGLE_SHEETS_CREDENTIALS: {GOOGLE_SHEETS_CREDENTIALS}")
-        logging.info(f"GOOGLE_SHEETS_ID: {GOOGLE_SHEETS_ID}")
-        print(f"GOOGLE_SHEETS_CREDENTIALS: {GOOGLE_SHEETS_CREDENTIALS}")
-        print(f"GOOGLE_SHEETS_ID: {GOOGLE_SHEETS_ID}")
+        logging.info(f"GOOGLE_SHEETS_CREDENTIALS: {credentials_file}")
+        logging.info(f"GOOGLE_SHEETS_ID: {spreadsheet_id}")
+        print(f"GOOGLE_SHEETS_CREDENTIALS: {credentials_file}")
+        print(f"GOOGLE_SHEETS_ID: {spreadsheet_id}")
 
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         try:
-            creds = Credentials.from_service_account_file(GOOGLE_SHEETS_CREDENTIALS, scopes=scope)
+            creds = Credentials.from_service_account_file(credentials_file, scopes=scope)
         except Exception as e:
             logging.error(f"Ошибка при загрузке credentials: {str(e)}")
             print(f"Ошибка при загрузке credentials: {str(e)}")
@@ -58,9 +58,9 @@ class GoogleSheetsClient:
 
         self.client = gspread.authorize(creds)
         try:
-            self.spreadsheet = self.client.open_by_key(GOOGLE_SHEETS_ID)
-            logging.info(f"Подключение к таблице с ID: {GOOGLE_SHEETS_ID}")
-            print(f"Подключение к таблице с ID: {GOOGLE_SHEETS_ID}")
+            self.spreadsheet = self.client.open_by_key(spreadsheet_id)
+            logging.info(f"Подключение к таблице с ID: {spreadsheet_id}")
+            print(f"Подключение к таблице с ID: {spreadsheet_id}")
         except Exception as e:
             logging.error(f"Ошибка при подключении к таблице: {str(e)}")
             print(f"Ошибка при подключении к таблице: {str(e)}")
@@ -282,7 +282,7 @@ class GoogleSheetsClient:
 if __name__ == "__main__":
     print("Запуск тестового скрипта...")
     try:
-        client = GoogleSheetsClient()
+        client = GoogleSheetsClient(GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_ID)
         print("Клиент инициализирован, получение данных...")
 
         # Выводим список доступных листов

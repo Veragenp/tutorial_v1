@@ -8,6 +8,7 @@ from telegram.ext import Application, MessageHandler, CallbackQueryHandler, filt
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from bybit_api import BybitAPI
 from google_sheets import GoogleSheetsClient
+from config import GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_ID  # Добавляем импорт
 
 # Настройка логирования
 project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -31,7 +32,7 @@ class TradeManager:
         print("Инициализация TradeManager")
 
         self.bybit = BybitAPI(api_key, api_secret)
-        self.sheets = GoogleSheetsClient()
+        self.sheets = GoogleSheetsClient(GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_ID)  # Обновляем вызов
         self.telegram_token = telegram_token
         self.chat_id = chat_id
         self.pending_confirmation = {}

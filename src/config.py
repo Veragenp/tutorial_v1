@@ -7,4 +7,4 @@ CHAT_ID = "491028848"
 # Bybit API (пока пустые, для будущего)
 BYBIT_API_KEY = 'Edu0Y3CeOIxVMoFcQH'
 BYBIT_API_SECRET = 'QrePMAQ11bXWWQDVutaSrKhdGdxZxbDRub2d'
-ALERT_TIMEOUT_MINUTES = 1  # Для тестов 1 минута, в продакшне можно установить 60
+ALERT_TIMEOUT_MINUTES = 60  # Для тестов 1 минута, в продакшне можно установить 60

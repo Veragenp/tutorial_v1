@@ -5,6 +5,7 @@ from datetime import datetime
 from bybit_api import BybitAPI
 import requests
 from google_sheets import GoogleSheetsClient
+from config import GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_ID  # Добавляем импорт
 
 # Создаем директорию для логов
 log_dir = "logs"
@@ -36,7 +37,7 @@ class PriceFetcher:
         print("Инициализация PriceFetcher...")
 
         # Получаем монеты из Google Sheets
-        google_sheets = GoogleSheetsClient()
+        google_sheets = GoogleSheetsClient(GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_ID)  # Обновляем вызов
         self.trading_coins = google_sheets.get_trading_coins()
         self.symbols = [coin["coin"] for coin in self.trading_coins]
 

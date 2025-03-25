@@ -5,6 +5,7 @@ from datetime import datetime
 from google_sheets import GoogleSheetsClient
 from fetch_prices import PriceFetcher
 import threading
+from config import GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_ID  # Добавляем импорт
 
 # Создаем директорию для логов
 log_dir = "logs"
@@ -36,7 +37,7 @@ class PriceMonitor:
         print("Инициализация PriceMonitor...")
 
         # Получаем монеты и уровни из Google Sheets
-        self.google_sheets = GoogleSheetsClient()
+        self.google_sheets = GoogleSheetsClient(GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEETS_ID)  # Обновляем вызов
         self.trading_coins = self.google_sheets.get_trading_coins()
         self.levels = {coin["coin"]: {"long_level": coin["long_level"], "short_level": coin["short_level"]} for coin in self.trading_coins}
 
